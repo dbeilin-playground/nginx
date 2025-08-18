@@ -1,4 +1,4 @@
-name: Build and Push to GHCR
+name: Build and Push NGINX
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: dbeilin-test/nginx-app
+  IMAGE_NAME: dbeilin-playground/nginx
 
 jobs:
   build-and-push:
@@ -16,6 +16,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      pull-requests: write
 
     steps:
     - name: Checkout code
@@ -34,7 +35,6 @@ jobs:
     - name: Generate version
       id: version
       run: |
-        # Generate version based on date and short commit hash
         VERSION="v1.0.$(date +%Y%m%d%H%M%S)-$(echo $GITHUB_SHA | cut -c1-7)"
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Generated version: $VERSION"
@@ -43,6 +43,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
+        platforms: linux/amd64,linux/arm64
         push: true
         tags: |
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
@@ -59,3 +60,39 @@ jobs:
         echo "🚀 Successfully built and pushed:"
         echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
         echo "Latest: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+
+    - name: Checkout config repository
+      uses: actions/checkout@v4
+      with:
+        repository: dbeilin-playground/config
+        token: ${{ secrets.PAT_TOKEN }}
+        path: devops-config
+        ref: main
+
+    - name: Update STG values-image.yaml
+      run: |
+        cd devops-config
+        # Update the image tag in STG environment
+        sed -i 's/tag: .*/tag: ${{ steps.version.outputs.version }}/' argocd/stg/stg-be/nginx/values-image.yaml
+        echo "Updated STG values-image.yaml with tag: ${{ steps.version.outputs.version }}"
+        cat argocd/stg/stg-be/nginx/values-image.yaml
+
+    - name: "Auto create pull-request"
+      uses: peter-evans/create-pull-request@v7
+      with:
+        path: devops-config
+        token: ${{ secrets.PAT_TOKEN }}
+        title: "[GHA] [${{ github.event.repository.name }}] on merge ${{ github.sha }} by ${{ github.actor }}"
+        commit-message: "[Github Action] [repo: ${{ github.event.repository.name }}] on merge ${{ github.sha }} by <@${{ github.actor }}>"
+        branch: ${{ github.event.repository.name }}
+        branch-suffix: timestamp
+        delete-branch: true
+        body: |
+          Changes by @${{ github.actor }} in `${{ github.event.repository.name }}`:
+          - Triggered by: @${{ github.triggering_actor }}
+          - Commit: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - Run attempt: ${{ github.run_attempt }}
+          - Updated image tag to: ${{ steps.version.outputs.version }}
+        labels: |
+          automated_pr
