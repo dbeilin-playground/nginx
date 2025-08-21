@@ -35,7 +35,7 @@ RUN apk add --no-cache \
     htop \
     strace \
     tcpdump \
-    netstat-nat \
+    net-tools \
     lsof \
     procps \
     && rm -rf /var/cache/apk/*
@@ -66,7 +66,7 @@ RUN echo '<!DOCTYPE html>' > /usr/share/nginx/html/index.html && \
     echo '<div style="margin-top: 30px; padding: 20px; background: rgba(0,0,0,0.2); border-radius: 10px;">' >> /usr/share/nginx/html/index.html && \
     echo '<h3>🔧 Debug Endpoints</h3>' >> /usr/share/nginx/html/index.html && \
     echo '<p><a href="/nginx_status" style="color: #fff; text-decoration: underline;">Nginx Status</a> (Port 8080)</p>' >> /usr/share/nginx/html/index.html && \
-    echo '<p>Debug tools: curl, htop, strace, tcpdump available</p>' >> /usr/share/nginx/html/index.html && \
+    echo '<p>Debug tools: curl, htop, strace, tcpdump, netstat available</p>' >> /usr/share/nginx/html/index.html && \
     echo '</div>' >> /usr/share/nginx/html/index.html && \
     echo '<script>document.getElementById("env").innerText = window.location.hostname;</script>' >> /usr/share/nginx/html/index.html && \
     echo '</body></html>' >> /usr/share/nginx/html/index.html
