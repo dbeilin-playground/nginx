@@ -3,8 +3,8 @@ name: Build and Push NGINX
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    paths-ignore:
+      - .github
 
 env:
   REGISTRY: ghcr.io
@@ -32,28 +32,12 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    # Enhanced version generation with cherry-pick detection
     - name: Generate version
       id: version
       run: |
-        BASE_VERSION="v1.0.$(date +%Y%m%d%H%M%S)-$(echo $GITHUB_SHA | cut -c1-7)"
-        BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-        
-        # Check if this is a cherry-pick branch
-        if [[ "$BRANCH_NAME" == cherrypick/* ]]; then
-          # Extract fix description from branch name
-          FIX_DESC=$(echo "$BRANCH_NAME" | sed 's/cherrypick\/prod-[0-9]*-//')
-          VERSION="${BASE_VERSION}-cherrypick-${FIX_DESC}"
-          echo "is_cherrypick=true" >> $GITHUB_OUTPUT
-          echo "Cherry-pick detected: $VERSION"
-        else
-          VERSION="$BASE_VERSION"
-          echo "is_cherrypick=false" >> $GITHUB_OUTPUT
-          echo "Regular build: $VERSION"
-        fi
-        
+        VERSION="v1.0.$(date +%Y%m%d%H%M%S)-$(echo $GITHUB_SHA | cut -c1-7)"
         echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+        echo "Generated version: $VERSION"
 
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
@@ -94,13 +78,10 @@ jobs:
         echo "🚀 Successfully built and pushed:"
         echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
         echo "Pprof: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-pprof"
-        if [[ "${{ steps.version.outputs.is_cherrypick }}" == "true" ]]; then
-          echo "🍒 CHERRY-PICK BUILD - Will be detected by Kargo cherry-pick system"
-        fi
+        echo "Latest: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        echo "Latest Pprof: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-pprof"
 
-    # Only update STG for main branch builds, skip for cherry-picks
     - name: Checkout config repository
-      if: steps.version.outputs.is_cherrypick != 'true'
       uses: actions/checkout@v4
       with:
         repository: dbeilin-playground/config
@@ -109,7 +90,6 @@ jobs:
         ref: main
 
     - name: Update STG values-image.yaml
-      if: steps.version.outputs.is_cherrypick != 'true'
       run: |
         cd devops-config
         # Update the image tag in STG environment
@@ -118,7 +98,6 @@ jobs:
         cat argocd/stg/stg-be/nginx/values-image.yaml
 
     - name: "Auto create pull-request"
-      if: steps.version.outputs.is_cherrypick != 'true'
       uses: peter-evans/create-pull-request@v7
       with:
         path: devops-config
@@ -137,11 +116,3 @@ jobs:
           - Updated image tag to: ${{ steps.version.outputs.version }}
         labels: |
           automated_pr
-
-    # Cherry-pick specific notification
-    - name: Cherry-pick build notification
-      if: steps.version.outputs.is_cherrypick == 'true'
-      run: |
-        echo "Cherry-pick build completed!"
-        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
-        echo "Branch: ${{ steps.version.outputs.branch_name }}"
