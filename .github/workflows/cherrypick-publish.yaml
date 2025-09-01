@@ -1,3 +1,4 @@
+# Add this as a separate file: .github/workflows/cherrypick-publish.yaml
 name: Cherry-pick Publish
 
 on:
@@ -107,7 +108,78 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    - name: Build and push Docker image (cherry-pick pprof)
+    - name: Comment success
+      run: |
+        curl -X POST \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          ${{ github.event.issue.comments_url }} \
+          -d '{"body":"✅ Cherry-pick build completed!\n\n**Image:**\n- `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}`\n\n**Next Steps:**\n1. Check Kargo \"cherrypick\" project for new Freight\n2. Promote to CAND environment for testing\n3. After validation, promote to PROD environment"}'
+
+---
+
+# Your existing workflow stays exactly the same
+# This is your current .github/workflows/build-push.yaml (unchanged)
+
+name: Build and Push NGINX
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: dbeilin-playground/nginx
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Generate version
+      id: version
+      run: |
+        VERSION="v1.0.$(date +%Y%m%d%H%M%S)-$(echo $GITHUB_SHA | cut -c1-7)"
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Generated version: $VERSION"
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        target: production
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        build-args: |
+          VERSION=${{ steps.version.outputs.version }}
+          BUILD_DATE=${{ github.event.head_commit.timestamp }}
+          GIT_COMMIT=${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Build and push Docker image (pprof)
       uses: docker/build-push-action@v5
       with:
         context: .
@@ -116,17 +188,54 @@ jobs:
         target: pprof
         tags: |
           ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-pprof
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-pprof
         build-args: |
           VERSION=${{ steps.version.outputs.version }}
           BUILD_DATE=${{ github.event.head_commit.timestamp }}
-          GIT_COMMIT=${{ steps.pr.outputs.head_sha }}
+          GIT_COMMIT=${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    - name: Comment success
+    - name: Output image details
       run: |
-        curl -X POST \
-          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          -H "Accept: application/vnd.github.v3+json" \
-          ${{ github.event.issue.comments_url }} \
-          -d '{"body":"✅ Cherry-pick build completed!\n\n**Images:**\n- `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}`\n- `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-pprof`\n\n**Next Steps:**\n1. Check Kargo \"cherrypick\" project for new Freight\n2. Promote to CAND environment for testing\n3. After validation, promote to PROD environment"}'
+        echo "🚀 Successfully built and pushed:"
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}"
+        echo "Pprof: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-pprof"
+        echo "Latest: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        echo "Latest Pprof: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-pprof"
+
+    - name: Checkout config repository
+      uses: actions/checkout@v4
+      with:
+        repository: dbeilin-playground/config
+        token: ${{ secrets.PAT_TOKEN }}
+        path: devops-config
+        ref: main
+
+    - name: Update STG values-image.yaml
+      run: |
+        cd devops-config
+        # Update the image tag in STG environment
+        sed -i 's/tag: .*/tag: ${{ steps.version.outputs.version }}/' argocd/stg/stg-be/nginx/values-image.yaml
+        echo "Updated STG values-image.yaml with tag: ${{ steps.version.outputs.version }}"
+        cat argocd/stg/stg-be/nginx/values-image.yaml
+
+    - name: "Auto create pull-request"
+      uses: peter-evans/create-pull-request@v7
+      with:
+        path: devops-config
+        token: ${{ secrets.PAT_TOKEN }}
+        title: "[GHA] [${{ github.event.repository.name }}] on merge ${{ github.sha }} by ${{ github.actor }}"
+        commit-message: "[Github Action] [repo: ${{ github.event.repository.name }}] on merge ${{ github.sha }} by <@${{ github.actor }}>"
+        branch: ${{ github.event.repository.name }}
+        branch-suffix: timestamp
+        delete-branch: true
+        body: |
+          Changes by @${{ github.actor }} in `${{ github.event.repository.name }}`:
+          - Triggered by: @${{ github.triggering_actor }}
+          - Commit: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - Run attempt: ${{ github.run_attempt }}
+          - Updated image tag to: ${{ steps.version.outputs.version }}
+        labels: |
+          automated_pr
